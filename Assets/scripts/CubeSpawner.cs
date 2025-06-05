@@ -1,46 +1,72 @@
 using UnityEngine;
+using Photon.Pun;
+using System.Collections.Generic;
+using System.Linq;
 
-public class CubeSpawner : MonoBehaviour
+public class CubeSpawner : MonoBehaviourPunCallbacks // Changed to MonoBehaviourPunCallbacks if you need Photon Callbacks
 {
-    public GameObject[] cubePrefabs;  // Liste des différents cubes à spawn
-    public Transform spawnPoint;  // Position où les cubes apparaissent
-    public string[] categories = { "Sales", "Marketing", "HR", "Finance" };  // Liste des catégories
-    private GameObject currentCube; // Référence au cube actuellement spawné
+    public GameObject[] cubePrefabs;
+    public Transform spawnPoint;
+    public string[] categories = { "Sales", "Marketing", "HR" };
+
+    private List<GameObject> availableCubes = new List<GameObject>();
+    // private GameObject currentCube; // This was used for distance check, less critical with GameManager
 
     void Start()
     {
-        SpawnNewCube(); // Spawn du premier cube au début du jeu
-    }
-
-    void Update()
-    {
-        if (currentCube != null) // Vérifie si un cube existe
+        if (PhotonNetwork.IsMasterClient)
         {
-            float distance = Vector3.Distance(currentCube.transform.position, spawnPoint.position);
+            availableCubes.AddRange(cubePrefabs);
+            int totalCubesForGame = cubePrefabs.Length; // Total unique prefabs to be spawned
 
-            if (distance > 1.5f) // Si le cube a été déplacé à plus de 1.5 unités
+            if (GameManager.Instance != null)
             {
-                currentCube = null; // On oublie l'ancien cube
-                SpawnNewCube(); // On spawn le suivant
+                GameManager.Instance.Master_RegisterTotalCubes(totalCubesForGame);
             }
+            else
+            {
+                Debug.LogError("CubeSpawner (MasterClient): GameManager instance not found to register total cubes.");
+            }
+
+            SpawnNewCube(); // Spawn the first cube
         }
     }
 
-    void SpawnNewCube()
+    // Update logic for distance check was removed as GameManager now tracks placed cubes.
+    // If you still want to respawn a cube if it's moved too far from spawn *before* placement,
+    // you would need to re-implement that part carefully, considering currentCube is MasterClient only.
+    // For now, assuming cubes are only respawned after correct placement.
+
+    public void SpawnNewCube()
     {
-        if (cubePrefabs.Length == 0) return; // Vérifie qu'il y a des cubes disponibles
-
-        int randomIndex = Random.Range(0, cubePrefabs.Length); // Choix aléatoire d'un cube
-        currentCube = Instantiate(cubePrefabs[randomIndex], spawnPoint.position, Quaternion.identity);
-
-        // Assigne une catégorie aléatoire
-        CubeMetadata metadata = currentCube.GetComponent<CubeMetadata>();
-        if (metadata != null)
+        if (PhotonNetwork.IsMasterClient)
         {
-            metadata.category = categories[Random.Range(0, categories.Length)];
-            if (metadata.textLabel != null)
+            if (availableCubes.Count > 0)
             {
-                metadata.textLabel.text = metadata.category; // Met à jour le texte au-dessus du cube
+                int randomIndex = Random.Range(0, availableCubes.Count);
+                GameObject prefabToSpawn = availableCubes[randomIndex];
+                GameObject newCube = PhotonNetwork.Instantiate(prefabToSpawn.name, spawnPoint.position, Quaternion.identity);
+                availableCubes.RemoveAt(randomIndex); // Remove the spawned type from available list
+
+                CubeMetadata metadata = newCube.GetComponent<CubeMetadata>();
+                if (metadata != null)
+                {
+                    metadata.category = categories[Random.Range(0, categories.Length)];
+                    // The CubeMetadata's OnPhotonSerializeView or an RPC should handle syncing this category
+                    // and updating the text label for relevant players.
+                    // Forcing an update here on MasterClient for the text label might be redundant if CubeMetadata handles it.
+                    // if (metadata.textLabel != null)
+                    // {
+                    //     metadata.textLabel.text = metadata.category;
+                    // }
+                }
+                Debug.Log($"CubeSpawner (MasterClient): Spawned new cube '{newCube.name}' with category '{metadata?.category}'. Cubes remaining in spawner list: {availableCubes.Count}");
+            }
+            else
+            {
+                Debug.Log("CubeSpawner (MasterClient): All unique cube types have been spawned and (presumably) placed.");
+                // GameManager now handles the win condition when cubesCorrectlyPlaced == totalCubesToPlace
+                // No direct EndGame call from here.
             }
         }
     }
